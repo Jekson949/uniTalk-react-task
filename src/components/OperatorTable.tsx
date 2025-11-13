@@ -39,10 +39,7 @@ type Column = {
   key: string;
   label: string;
   sortable?: boolean;
-  render?: (
-    op: Operator,
-    addonsDict: Record<string, string>
-  ) => React.ReactNode;
+  render?: (op: Operator) => React.ReactNode;
 };
 
 const formatDate = (iso: string) => {
@@ -54,11 +51,17 @@ const formatDate = (iso: string) => {
 const buildAddonColumns = (addons: OperatorAddon[]): string[] => {
   const set = new Set<string>();
   for (const a of addons) set.add(a.fieldName);
+
   const sorted = Array.from(set).sort((a, b) => a.localeCompare(b));
   const promoted = ["SMTP", "JBOD"];
   const start: string[] = [];
   const rest: string[] = [];
-  for (const f of sorted) (promoted.includes(f) ? start : rest).push(f);
+
+  for (const f of sorted) {
+    if (promoted.includes(f)) start.push(f);
+    else rest.push(f);
+  }
+
   return [...start, ...rest];
 };
 
@@ -73,6 +76,19 @@ export const OperatorTable: React.FC = () => {
   const loading = ops.isLoading || add.isLoading;
 
   const addonFieldNames = buildAddonColumns(add.data ?? []);
+
+  const addonsByOperator = React.useMemo(() => {
+    const map: Record<string, Record<string, string>> = {};
+
+    for (const a of add.data ?? []) {
+      const opId = a.id;
+      if (!map[opId]) map[opId] = {};
+      map[opId][a.fieldName] = a.text;
+    }
+
+    return map;
+  }, [add.data]);
+
   const columns: Column[] = [
     { key: "#", label: "#" },
     {
@@ -110,30 +126,28 @@ export const OperatorTable: React.FC = () => {
       key: `addon:${fname}`,
       label: `\`${fname}\``,
       sortable: true,
-      render: (_op, dict) => dict[fname] ?? "—",
+      render: (op) => addonsByOperator[op.id]?.[fname] ?? "—",
     })),
   ];
-
-  const addonDict: Record<string, string> = React.useMemo(() => {
-    const dict: Record<string, string> = {};
-    for (const a of add.data ?? []) {
-      dict[a.fieldName] = a.text;
-    }
-    return dict;
-  }, [add.data]);
 
   const filteredSorted = React.useMemo(() => {
     let rows = (ops.data ?? []) as Operator[];
 
     const q = filters.search.trim().toLowerCase();
-    if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
+    if (q) {
+      rows = rows.filter((r) => r.name.toLowerCase().includes(q));
+    }
 
-    if (filters.working === "working") rows = rows.filter((r) => r.isWorking);
-    if (filters.working === "not_working")
+    if (filters.working === "working") {
+      rows = rows.filter((r) => r.isWorking);
+    }
+    if (filters.working === "not_working") {
       rows = rows.filter((r) => !r.isWorking);
+    }
 
     const df = filters.dateFrom ? new Date(filters.dateFrom) : null;
     const dt = filters.dateTo ? new Date(filters.dateTo) : null;
+
     if (df || dt) {
       rows = rows.filter((r) => {
         const d = new Date(r.createdAt);
@@ -147,19 +161,24 @@ export const OperatorTable: React.FC = () => {
     const { orderBy, order } = sort;
     rows.sort((a, b) => {
       const dir = order === "asc" ? 1 : -1;
+
       const getVal = (op: Operator) => {
         if (orderBy === "user") return op.name;
         if (orderBy === "isWorking") return op.isWorking ? 1 : 0;
         if (orderBy === "createdAt")
           return new Date(op.createdAt).getTime() || 0;
+
         if (orderBy.startsWith("addon:")) {
           const key = orderBy.split(":")[1] ?? "";
-          return (addonDict[key] ?? "").toLowerCase();
+          return (addonsByOperator[op.id]?.[key] ?? "").toLowerCase();
         }
+
         return "";
       };
+
       const va = getVal(a);
       const vb = getVal(b);
+
       if (va < vb) return -1 * dir;
       if (va > vb) return 1 * dir;
       return 0;
@@ -173,7 +192,7 @@ export const OperatorTable: React.FC = () => {
     filters.dateFrom,
     filters.dateTo,
     sort,
-    addonDict,
+    addonsByOperator,
   ]);
 
   const paged = React.useMemo(() => {
@@ -182,8 +201,9 @@ export const OperatorTable: React.FC = () => {
   }, [filteredSorted, page, rowsPerPage]);
 
   const handleSort = (key: string) => {
-    const isAsc = sort.orderBy === key && sort.order === "asc";
-    dispatch(setSort({ orderBy: key, order: isAsc ? "desc" : "asc" }));
+    const sortKey = key === "user" ? "user" : key;
+    const isAsc = sort.orderBy === sortKey && sort.order === "asc";
+    dispatch(setSort({ orderBy: sortKey, order: isAsc ? "desc" : "asc" }));
   };
 
   return (
@@ -220,7 +240,9 @@ export const OperatorTable: React.FC = () => {
           value={filters.dateFrom ?? ""}
           onChange={(e) => dispatch(setDateFrom(e.target.value || null))}
           size="small"
-          InputLabelProps={{ shrink: true }}
+          slotProps={{
+            inputLabel: { shrink: true },
+          }}
         />
         <TextField
           type="datetime-local"
@@ -228,7 +250,9 @@ export const OperatorTable: React.FC = () => {
           value={filters.dateTo ?? ""}
           onChange={(e) => dispatch(setDateTo(e.target.value || null))}
           size="small"
-          InputLabelProps={{ shrink: true }}
+          slotProps={{
+            inputLabel: { shrink: true },
+          }}
         />
       </Box>
 
@@ -239,9 +263,7 @@ export const OperatorTable: React.FC = () => {
               {columns.map((c) => (
                 <TableCell
                   key={c.key}
-                  onClick={() =>
-                    c.sortable && handleSort(c.key === "user" ? "user" : c.key)
-                  }
+                  onClick={() => c.sortable && handleSort(c.key)}
                   sx={{
                     cursor: c.sortable ? "pointer" : "default",
                     fontWeight: 700,
@@ -249,20 +271,22 @@ export const OperatorTable: React.FC = () => {
                 >
                   <Box display="flex" alignItems="center" gap={1}>
                     <span>{c.label}</span>
-                    {c.sortable && sort.orderBy === c.key && (
-                      <Typography
-                        component="span"
-                        fontSize={12}
-                        color="text.secondary"
-                      >
-                        {sort.order === "asc" ? "▲" : "▼"}
-                      </Typography>
-                    )}
+                    {c.sortable &&
+                      sort.orderBy === (c.key === "user" ? "user" : c.key) && (
+                        <Typography
+                          component="span"
+                          fontSize={12}
+                          color="text.secondary"
+                        >
+                          {sort.order === "asc" ? "▲" : "▼"}
+                        </Typography>
+                      )}
                   </Box>
                 </TableCell>
               ))}
             </TableRow>
           </TableHead>
+
           <TableBody>
             {loading ? (
               <TableRow>
@@ -293,18 +317,17 @@ export const OperatorTable: React.FC = () => {
               paged.map((op, idx) => (
                 <TableRow hover key={op.id}>
                   {columns.map((c) => {
-                    if (c.key === "#")
+                    if (c.key === "#") {
                       return (
                         <TableCell key={c.key}>
                           {page * rowsPerPage + idx + 1}
                         </TableCell>
                       );
-                    if (c.render)
-                      return (
-                        <TableCell key={c.key}>
-                          {c.render(op, addonDict)}
-                        </TableCell>
-                      );
+                    }
+
+                    if (c.render) {
+                      return <TableCell key={c.key}>{c.render(op)}</TableCell>;
+                    }
 
                     const value = (op as any)[c.key];
                     return <TableCell key={c.key}>{String(value)}</TableCell>;
